@@ -1,0 +1,331 @@
+﻿@page "/MessagePage"
+@using FireTalk.Components.Layout
+@using FireTalk.Models
+@using FireTalk.Services
+@using Google.Cloud.Firestore
+@inject IFireTalkService FireTalkService;
+@inject FireStoreService FireStoreService;
+@inject AppState AppState;
+@inject IJSRuntime JSRuntime;
+
+<script>
+    window.ScrollHandler = {
+        _handler: null,
+
+        initializeScrollListener: function (dotNetObject) {
+            const container = document.getElementById('chatContainer');
+            if (container) {
+                this._handler = () => {
+                    if (container.scrollTop <= 50) {
+                        dotNetObject.invokeMethodAsync('OnScrollToTop');
+                    }
+                };
+                container.addEventListener('scroll', this._handler);
+            }
+        },
+
+          scrollToBottom: function () {
+            const container = document.getElementById('chatContainer');
+            if (container) {
+                container.scrollTop = container.scrollHeight;
+            }
+        },
+
+
+        disposeScrollListener: function () {
+            const container = document.getElementById('chatContainer');
+            if (container && this._handler) {
+                container.removeEventListener('scroll', this._handler);
+                this._handler = null;
+            }
+        }
+    };
+</script>
+
+
+<div style="height:85vh">
+    <MudStack id="chatContainer" Style="height:100%;overflow-y: auto; flex-direction: column-reverse;">
+        @if (isLoading || _isLoadingMoreMessages)
+        {
+            <MudStack Spacing="0" AlignItems="AlignItems.Center">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Small" Class="my-5" />
+                <MudText Typo="Typo.body2">Loading...</MudText>
+            </MudStack>
+        }
+
+        @foreach (var chat in chats.OrderBy(f => f.CreatedAt))
+        {
+            <MudChat ChatPosition="@(chat.IsSender == true ? ChatBubblePosition.End : ChatBubblePosition.Start)">
+                <MudChatBubble>
+                    <MudAvatar Style="@($"background-color:{chat.OwnerBackgroundColor}")" Size="Size.Small">
+                        @GetUserInitials(chat.OwnerName)
+                    </MudAvatar>
+                    <MudText Typo="Typo.body1">@chat.Text</MudText>
+                    <MudText Typo="Typo.caption" Align="Align.Right">@GetWeeklyDateInfo(chat.CreatedAt.ToDateTime())</MudText>
+                </MudChatBubble>
+            </MudChat>
+        }
+    </MudStack>
+
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+        <MudTextField Variant="Variant.Outlined" @bind-Value="_messageText" AutoGrow="true" FullWidth="true"></MudTextField>
+        <MudIconButton Color="Color.Primary" Variant="Variant.Filled" OnClick="@OnCreateMessage" Icon="@Icons.Material.Filled.Send" />
+    </MudStack>
+</div>
+
+
+@code {
+
+    private string _messageText;
+    private bool _isSending = false;
+    private MessageGroupModel _groupDetails;
+    private bool isLoading = false;
+    private int _pageSize = 10;
+    private List<ChatModel> chats = new();
+    private List<UserModel> _userDetails = new();
+    private FirestoreChangeListener _listener;
+    private FirestoreDb _fireStoreDb;
+    private DotNetObjectReference<MessagePage>? _dotNetRef;
+    private bool _isLoadingMoreMessages = false;
+    private Dictionary<string, string> _userColorInfo = new();
+
+    protected async override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _dotNetRef = DotNetObjectReference.Create(this);
+            await JSRuntime.InvokeVoidAsync("ScrollHandler.initializeScrollListener", _dotNetRef);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _fireStoreDb = FireStoreService.Db;
+        if (AppState.CurrentData != null)
+        {
+            _groupDetails = (MessageGroupModel)AppState.CurrentData;
+            await GetUserDetails();
+        }
+        await LoadMessages();
+        SubscribeToMessageListener();
+    }
+
+    private void SubscribeToMessageListener()
+    {
+        _listener = _fireStoreDb.Collection("chats").
+        WhereEqualTo("GroupId", _groupDetails.Id).
+        WhereGreaterThanOrEqualTo("CreatedAt", Timestamp.FromDateTime(DateTime.UtcNow)).
+        LimitToLast(_pageSize).
+        OrderBy("CreatedAt").Listen(async snapshot =>
+        {
+            if (snapshot.Changes.Count > 0)
+            {
+                foreach (var change in snapshot.Changes)
+                {
+                    if (change.ChangeType == DocumentChange.Type.Added)
+                    {
+
+
+                        var newChat = change.Document.ConvertTo<ChatModel>();
+
+                        if (chats.Any(f => f.Id == newChat.Id))
+                            return;
+
+                        var userInfo = _userDetails.FirstOrDefault(u => u.Id == newChat.OwnerId);
+                        if (userInfo != null)
+                        {
+                            newChat.OwnerName = userInfo.Name;
+                            newChat.OwnerBackgroundColor = GenerateRandomColor(userInfo.Id);
+                        }
+
+                        chats.Add(newChat);
+                        await InvokeAsync(StateHasChanged);
+                        await JSRuntime.InvokeVoidAsync("ScrollHandler.scrollToBottom");
+                    }
+                }
+            }
+        });
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _listener?.StopAsync();
+        await JSRuntime.InvokeVoidAsync("ScrollHandler.disposeScrollListener");
+        _dotNetRef?.Dispose();
+    }
+
+    private async Task GetUserDetails()
+    {
+        var userDetails = await FireTalkService.GetUserDetailsByIds(_groupDetails.Members);
+        if (userDetails?.Count > 0)
+        {
+            foreach(var user in userDetails)
+            {
+                GenerateRandomColor(user.Id);
+            }
+            _userDetails = userDetails;
+        }
+    }
+
+    private string GenerateRandomColor(string userId)
+    {
+        if (_userColorInfo.ContainsKey(userId))
+        {
+            return _userColorInfo[userId];
+        }
+        var random = new Random(userId.GetHashCode());
+        var color = String.Format("#{0:X6}", random.Next(0x1000000));
+        _userColorInfo[userId] = color;
+        return color;
+    }
+
+    private string GetUserInitials(string name)
+    {
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            var names = name.Split(' ');
+            if (names.Length >= 2)
+            {
+                return $"{names[0][0]}{names[1][0]}".ToUpper();
+            }
+            else if (names.Length == 1)
+            {
+                return $"{names[0][0]}".ToUpper();
+            }
+        }
+        return string.Empty;
+    }
+
+    private async Task OnCreateMessage()
+    {
+        if (string.IsNullOrWhiteSpace(_messageText))
+            return;
+
+        if (_isSending) return;
+        _isSending = true;
+
+        var newMessage = new ChatModel
+        {
+            Id = Guid.NewGuid().ToString(),
+            GroupId = _groupDetails.Id,
+            OwnerId = MainLayout.UserInfo.Id,
+            OwnerName = MainLayout.UserInfo.Name,
+            OwnerBackgroundColor = GenerateRandomColor(MainLayout.UserInfo.Id),
+            Text = _messageText,
+            CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow)
+        };
+
+        chats.Add(newMessage);
+
+        _messageText = string.Empty;
+        await FireTalkService.CreateChatMessage(newMessage);
+        _isSending = false;
+        await JSRuntime.InvokeVoidAsync("ScrollHandler.scrollToBottom");
+    }
+
+    public static string GetWeeklyDateInfo(DateTime messageDateTime)
+    {
+        var localTime = messageDateTime.ToLocalTime();
+
+        string returnDate = localTime.ToString("dd MMM yyyy");
+        if (localTime.Date == DateTime.Now.Date)
+        {
+            returnDate = "Today";
+        }
+        else if (localTime.Date == DateTime.Now.Date.AddDays(-1))
+        {
+            returnDate = "Yesterday";
+        }
+        else if (localTime.Date == DateTime.Now.Date.AddDays(-2) ||
+                 localTime.Date == DateTime.Now.Date.AddDays(-3) ||
+                 localTime.Date == DateTime.Now.Date.AddDays(-4) ||
+                 localTime.Date == DateTime.Now.Date.AddDays(-5) ||
+                 localTime.Date == DateTime.Now.Date.AddDays(-6))
+        {
+            returnDate = localTime.ToString("dddd");
+        }
+        return returnDate;
+    }
+
+    [JSInvokable]
+    public async Task OnScrollToTop()
+    {
+        await LoadMoreMessages();
+    }
+
+    private async Task LoadMoreMessages()
+    {
+        if (chats.Count == 0) return;
+
+        var lastMessage = chats.OrderBy(f => f.CreatedAt).FirstOrDefault();
+        if (lastMessage == null) return;
+
+        if (_isLoadingMoreMessages) return;
+        _isLoadingMoreMessages = true;
+        StateHasChanged();
+
+        var chatQuery = _fireStoreDb.Collection("chats")
+            .WhereEqualTo("GroupId", _groupDetails.Id)
+            .OrderByDescending("CreatedAt")
+            .StartAfter(lastMessage.CreatedAt)
+            .Limit(_pageSize);
+
+        var snapshot = await chatQuery.GetSnapshotAsync();
+
+        var newMessages = new List<ChatModel>();
+
+        foreach (var document in snapshot.Documents)
+        {
+            var chat = document.ConvertTo<ChatModel>();
+            if (chats.Any(f => f.Id == chat.Id))
+                continue;
+            var userInfo = _userDetails.FirstOrDefault(u => u.Id == chat.OwnerId);
+            if (userInfo != null)
+            {
+                chat.OwnerName = userInfo.Name;
+                chat.OwnerBackgroundColor = GenerateRandomColor(userInfo.Id);
+            }
+
+            newMessages.Add(chat);
+        }
+        ;
+
+        if (newMessages.Count > 0)
+        {
+            chats.InsertRange(0, newMessages.OrderBy(d => d.CreatedAt));
+            StateHasChanged();
+        }
+        _isLoadingMoreMessages = false;
+        StateHasChanged();
+
+    }
+
+
+    private async Task LoadMessages()
+    {
+        isLoading = true;
+        StateHasChanged();
+
+        var messages = await FireTalkService.GetUserChats(_groupDetails.Id, _pageSize);
+        if (messages?.Count > 0)
+        {
+            foreach (var message in messages)
+            {
+                var userInfo = _userDetails.FirstOrDefault(u => u.Id == message.OwnerId);
+                if (userInfo != null)
+                {
+                    message.OwnerName = userInfo.Name;
+                    message.OwnerBackgroundColor = GenerateRandomColor(userInfo.Id);
+                }
+                ;
+            }
+            chats = messages;
+        }
+        ;
+
+        isLoading = false;
+        StateHasChanged();
+
+        await JSRuntime.InvokeVoidAsync("ScrollHandler.scrollToBottom");
+    }
+}

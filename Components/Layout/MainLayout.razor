@@ -1,0 +1,106 @@
+﻿@using FireTalk.Components.Dialogs
+@using FireTalk.Models
+@using MudBlazor
+@using Newtonsoft.Json
+@inherits LayoutComponentBase
+@inject IDialogService DialogService
+@inject NavigationManager NavManager;
+
+<MudThemeProvider />
+<MudDialogProvider />
+<MudPopoverProvider />
+<MudLayout>
+    @if (_isUserLoggedIn)
+    {
+        <MudDrawer @bind-Open="_drawerOpen">
+            <MudNavMenu>
+                <MudPaper Class="m-2 px-3 py-3" Style="height:95vh">
+                    <MudStack AlignItems="AlignItems.Center" Row="true">
+                        <MudAvatar Size="Size.Medium">@GetUserInitials()</MudAvatar>
+                        <MudStack Spacing="0">
+                            <MudText Typo="Typo.h5">@UserInfo.Name</MudText>
+                            <MudText Typo="Typo.body2">@UserInfo.Email</MudText>
+                        </MudStack>
+                    </MudStack>
+
+                    <MudDivider Class="my-2" />
+
+                    <MudNavLink Href="/home" Icon="@Icons.Material.Filled.Home">Home</MudNavLink>
+                    <MudNavLink Href="/profile" Icon="@Icons.Material.Filled.People">Profile</MudNavLink>
+                    <MudNavLink OnClick="Logout" Icon="@Icons.Material.Filled.Logout">Logout</MudNavLink>
+                </MudPaper>
+            </MudNavMenu>
+        </MudDrawer>
+        <MudAppBar>
+            <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="@((e) => DrawerToggle())" />
+            FireTalk
+            <MudSpacer />
+            <MudAvatar Size="Size.Small">@GetUserInitials()</MudAvatar>
+        </MudAppBar>
+    }
+
+    <MudMainContent>
+        <MudContainer Style="padding:10px">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    public static UserModel UserInfo;
+    private bool _isUserLoggedIn => UserInfo != null;
+    private bool _drawerOpen = true;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+
+        string userInfo = Preferences.Get("UserInfo", string.Empty);
+        if (!string.IsNullOrEmpty(userInfo))
+        {
+            UserInfo = JsonConvert.DeserializeObject<UserModel>(userInfo);
+        }
+    }
+
+    private string GetUserInitials()
+    {
+        if (UserInfo != null)
+        {
+            var names = UserInfo.Name.Split(' ');
+            if (names.Length >= 2)
+            {
+                return $"{names[0][0]}{names[1][0]}".ToUpper();
+            }
+            else if (names.Length == 1)
+            {
+                return $"{names[0][0]}".ToUpper();
+            }
+        }
+        return string.Empty;
+    }
+
+    void DrawerToggle()
+    {
+        _drawerOpen = !_drawerOpen;
+    }
+
+    async Task Logout()
+    {
+        var parameters = new DialogParameters<Dialog>
+        {
+           {x=> x.Title, "Confirm Logout" },
+           {x=> x.Description, "Are you sure you want to logout?" },
+           {x=> x.OkayButtonText, "Yes" },
+        };
+
+        var res = await DialogService.ShowAsync<Dialog>("Confirm Logout", parameters);
+        var result = await res.Result;
+
+        if (!result.Canceled)
+        {
+            UserInfo = null;
+            Preferences.Clear();
+            NavManager.NavigateTo("/");
+        }
+    }
+}

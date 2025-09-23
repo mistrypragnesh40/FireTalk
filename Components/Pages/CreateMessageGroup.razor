@@ -1,0 +1,128 @@
+﻿@using FireTalk.Components.Layout
+@using FireTalk.Models
+@using FireTalk.Services
+@using Google.Cloud.Firestore
+@inject IFireTalkService FireTalkService;
+@inject IDialogService DialogService;
+
+
+<MudDialog Style="margin-top:100px;border-radius:10px;z-index:10000">
+    <DialogContent>
+        <MudStack>
+            <MudStack Row="true">
+                <MudText Typo="Typo.h6">Create Message Group</MudText>
+                <MudSpacer />
+                <MudIcon onclick="@ClosePopup" Icon="@Icons.Material.Filled.Close" />
+            </MudStack>
+
+            <MudForm @ref="_mudFormRef">
+                <MudTextField @bind-Value="_messageTitle" Required="true" Label="Title" Variant="Variant.Outlined" />
+                <MudTextField @bind-Value="_messageText" Required="true" Label="Message" MaxLines=3 Variant="Variant.Outlined" />
+                <MudSelect Label="Select Member" T="UserModel"
+                           MultiSelection="true"
+                           Required="true"
+                           ToStringFunc="@(user=> user==null?null:user.Name)"
+                           Variant="Variant.Outlined"
+                           @bind-SelectedValues="_members">
+                    @foreach (var user in _allUsers)
+                    {
+                        <MudSelectItem Value="user" T="UserModel">
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                                <MudAvatar Size="Size.Small">@user.Name?.Substring(0, 1).ToUpper()</MudAvatar>
+                                <MudStack Spacing="0">
+                                    <MudText Typo="Typo.subtitle2">@user.Name</MudText>
+                                    <MudText Typo="Typo.body2">@user.Email</MudText>
+                                </MudStack>
+                            </MudStack>
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-4 mb-2" FullWidth="true"
+                           OnClick="@(()=> SaveMessageGroup())">
+                    @if (isLoading)
+                    {
+                        <MudProgressCircular Size="Size.Small" Color="Color.Inherit" Class="me-2" />
+                        <MudText>Creating...</MudText>
+                    }
+                    else
+                    {
+                        <MudText>Create Group</MudText>
+                    }
+                </MudButton>
+            </MudForm>
+
+          
+        </MudStack>
+    </DialogContent>
+</MudDialog>
+@code {
+    private string _messageTitle;
+    private string _messageText;
+    private IEnumerable<UserModel> _members;
+    private List<UserModel> _allUsers = new();
+    private MudForm _mudFormRef;
+    private bool isLoading;
+    [CascadingParameter] 
+    private IMudDialogInstance MudDialog{ get; set; }
+
+    protected async override Task OnInitializedAsync()
+    {
+        var users = await FireTalkService.GetAllUsers();
+
+        if (users?.Count > 0)
+        {
+            _allUsers = users.Where(f=> f.Id!= MainLayout.UserInfo.Id).ToList();
+        }
+    }
+
+    private void ClosePopup()
+    {
+        MudDialog.Close();
+    }
+
+
+    private async Task SaveMessageGroup()
+    {
+        await _mudFormRef.Validate();
+
+        if (_mudFormRef.IsValid)
+        {
+            isLoading = true;
+
+            var members = _members.Select(f => f.Id).ToList();
+            //owner id
+            members.Add(MainLayout.UserInfo.Id);
+
+            var payload = new MessageGroupModel
+            {
+                Title = _messageTitle,
+                LastSentMessage = _messageText,
+                CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                LastSentMssageTime = Timestamp.FromDateTime(DateTime.UtcNow),
+                Id = Guid.NewGuid().ToString(),
+                Members = members,
+                OwnerId = MainLayout.UserInfo.Id
+            };
+
+            var response = await FireTalkService.CreateMessageGroup(payload);
+            var chatResponse = await FireTalkService.CreateChatMessage(new ChatModel
+            {
+                CreatedAt = Timestamp.FromDateTime(DateTime.UtcNow),
+                GroupId = payload.Id,
+                Id = Guid.NewGuid().ToString(),
+                OwnerId= MainLayout.UserInfo.Id,
+                Text = _messageText
+            });
+
+            if (response)
+            {
+                await  DialogService.ShowMessageBox("Group Created", "Group Created Successfully");
+            }
+            isLoading = false;
+
+            MudDialog.Close();
+        }
+
+    
+    }
+}

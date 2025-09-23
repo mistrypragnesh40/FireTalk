@@ -1,0 +1,111 @@
+﻿@page "/Home"
+@using FireTalk.Components.Layout
+@using FireTalk.Models
+@using FireTalk.Services
+@using MudBlazor
+@inject IDialogService DialogService
+@inject IFireTalkService FireTalkService
+@inject NavigationManager NavManager
+@inject AppState AppState
+
+
+<div style="position:fixed;bottom:24px;right:24px;z-index:9999">
+    <MudFab OnClick="@OnCreateMessage" StartIcon="@Icons.Material.Filled.Add" Size="Size.Small" />
+</div>
+
+<MudStack>
+
+    @if(isLoading)
+    {
+        <MudStack Spacing="0" AlignItems="AlignItems.Center">
+            <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Large" Class="my-5" />
+            <MudText Typo="Typo.body2">Loading...</MudText>
+        </MudStack>
+    }
+    
+    @foreach(var group in _groups)
+    {
+        <MudCard onclick="@(()=>OnMessageGroupClick(group))">
+            <MudCardContent>
+                <MudStack Row="true" AlignItems="AlignItems.End">
+                    <MudStack>
+                        <MudText Typo="Typo.h6">@group.Title</MudText>
+                        <MudText Typo="Typo.body2">@group.LastSentMessage</MudText>
+                    </MudStack>
+                    <MudSpacer />
+
+                    <MudText Typo="Typo.body2">@GetWeeklyDateInfo(group.LastSentMssageTime.ToDateTime())</MudText>
+                </MudStack>
+               
+            </MudCardContent>
+        </MudCard>
+    }
+
+</MudStack>
+
+@code {
+    private List<MessageGroupModel> _groups = new();
+
+    private bool isLoading = false;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await GetUserGroups();
+    }
+
+    private async Task GetUserGroups()
+    {
+        isLoading = true;
+        StateHasChanged();
+        var groups =await FireTalkService.GetUserGroups(MainLayout.UserInfo.Id);
+        if (groups?.Count > 0)
+        {
+            _groups = groups;
+        }
+
+        isLoading = false;
+        StateHasChanged();
+    }
+
+    public static string GetWeeklyDateInfo(DateTime messageDateTime)
+    {
+        var localTime = messageDateTime.ToLocalTime();
+
+        string returnDate = localTime.ToString("dd MMM yyyy");
+        if (localTime.Date == DateTime.Now.Date)
+        {
+            returnDate = "Today";
+        }
+        else if (localTime.Date == DateTime.Now.Date.AddDays(-1))
+        {
+            returnDate = "Yesterday";
+        }
+        else if (localTime.Date == DateTime.Now.Date.AddDays(-2) ||
+                 localTime.Date == DateTime.Now.Date.AddDays(-3) ||
+                 localTime.Date == DateTime.Now.Date.AddDays(-4) ||
+                 localTime.Date == DateTime.Now.Date.AddDays(-5) ||
+                 localTime.Date == DateTime.Now.Date.AddDays(-6))
+        {
+            returnDate = localTime.ToString("dddd");
+        }
+        return returnDate;
+    }
+
+    void OnMessageGroupClick(MessageGroupModel group)
+    {
+        AppState.CurrentData = group;
+        NavManager.NavigateTo("/MessagePage");
+    }
+
+
+   async Task  OnCreateMessage()
+    {
+        var options = new DialogOptions()
+        {
+            FullScreen = true,
+            NoHeader = true,
+        };
+
+        await DialogService.ShowAsync<CreateMessageGroup>(title: "", options: options);
+    }
+}
